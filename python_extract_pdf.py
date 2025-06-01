@@ -15,7 +15,6 @@ def extract_valid_requirements_only(pdf_path):
     current_details = []
     cr_number = ""
     info_type = "Requirement"
-    last_line_was_guid = False
 
     for page in doc:
         lines = page.get_text().split('\n')
@@ -23,45 +22,43 @@ def extract_valid_requirements_only(pdf_path):
         # Remove headers and footers
         lines = [
             line for line in lines
-            if not re.search(r"GM Confidential|CYS2407.*\.pdf|Page \d+ of \d+|\b\d{4}-\d{2}-\d{2}\b", line)
-            and not re.match(r"^\s*\d+\s*$", line)
+            if not re.search(r"GM Confidential|Page \d+|^\s*\d+\s*$", line)
         ]
 
         for i, line in enumerate(lines):
             line = line.strip()
-            is_guid_line = "GUID: CYS-" in line
-            is_next_guid = (i + 1 < len(lines)) and ("GUID: CYS-" in lines[i + 1])
-            is_heading_like = line.isupper() and len(line.split()) <= 6
+            if "GUID: CYS-" in line:
+                # Check next few lines for early skip (avoid headings or GUID chains)
+                next_lines = lines[i+1:i+4]
+                has_next_guid = any("GUID: CYS-" in l for l in next_lines)
+                has_substantial_text = any(len(l.strip()) > 20 for l in next_lines)
 
-            if is_guid_line:
+                if has_next_guid or not has_substantial_text:
+                    # Skip heading-like GUID
+                    current_id, current_details, cr_number = None, [], ""
+                    continue
+
+                # Store previous if exists
                 if current_id and current_details:
                     full_id = f"{current_id} / {cr_number}" if cr_number else current_id
                     details_text = "\n".join(current_details).strip()
                     requirements.append([full_id, details_text, info_type, ""])
 
+                # New ID
                 match = re.search(r"(CYS-[\w\-]+)", line)
                 current_id = match.group(1) if match else None
                 cr_match = re.search(r"CR\s+\d+", line)
                 cr_number = cr_match.group(0) if cr_match else ""
                 info_type = "Information" if "(information only)" in line.lower() else "Requirement"
                 current_details = []
-                last_line_was_guid = True
-
             elif current_id:
-                if is_next_guid or is_heading_like or last_line_was_guid:
-                    current_id, current_details, cr_number = None, [], ""
-                    last_line_was_guid = False
-                elif "CR " in line and not cr_number:
+                if "CR " in line and not cr_number:
                     cr_match = re.search(r"CR\s+\d+", line)
                     cr_number = cr_match.group(0) if cr_match else ""
-                    full_id = f"{current_id} / {cr_number}" if cr_number else current_id
-                    details_text = "\n".join(current_details).strip()
-                    requirements.append([full_id, details_text, info_type, ""])
-                    current_id, current_details, cr_number = None, [], ""
-                elif not re.match(r'^\|.*\|$', line):  # skip table-like lines
+                elif not re.match(r'^\|.*\|$', line):  # Skip table-like rows
                     current_details.append(line.strip())
-                    last_line_was_guid = False
 
+    # Final save
     if current_id and current_details:
         full_id = f"{current_id} / {cr_number}" if cr_number else current_id
         details_text = "\n".join(current_details).strip()
