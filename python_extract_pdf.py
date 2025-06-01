@@ -1,3 +1,14 @@
+import fitz  # PyMuPDF
+import pandas as pd
+import re
+from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Font
+
+# ----------- Requirement Extraction -----------
+
 def extract_requirements_final(pdf_path):
     doc = fitz.open(pdf_path)
     requirements = []
