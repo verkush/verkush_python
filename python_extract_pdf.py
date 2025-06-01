@@ -13,8 +13,11 @@ def extract_requirements_final(pdf_path):
     doc = fitz.open(pdf_path)
     requirements = []
 
+    # Regex patterns
     header_footer_patterns = re.compile(r"GM Confidential|Page \d+|^\s*\d+\s*$", re.IGNORECASE)
     table_pattern = re.compile(r'^\|.*\|$')
+    heading_guid_pattern = re.compile(r"^\d+(\.\d+)*\s+.*GUID:", re.IGNORECASE)
+    requirement_line_pattern = re.compile(r"^GUID:\s*CYS-[\w\-]+.*CR\s+\d+", re.IGNORECASE)
 
     for page in doc:
         lines = page.get_text().split('\n')
@@ -24,19 +27,27 @@ def extract_requirements_final(pdf_path):
         while i < len(lines):
             line = lines[i]
 
-            if re.match(r"GUID:\s*CYS-[\w\-]+.*CR\s+\d+", line, re.IGNORECASE):
+            if requirement_line_pattern.match(line):
                 req_id_line = line.strip()
                 info_type = "Information" if "(information only)" in req_id_line.lower() else "Requirement"
 
-                # Get 1–3 lines after it for details
+                # Gather detail lines until next requirement or page end
                 details = []
                 j = i + 1
                 while j < len(lines):
                     next_line = lines[j].strip()
-                    if re.match(r"GUID:\s*CYS-[\w\-]+", next_line):
+
+                    if requirement_line_pattern.match(next_line):
                         break
-                    if not header_footer_patterns.search(next_line) and not table_pattern.match(next_line):
+
+                    if (
+                        not header_footer_patterns.search(next_line) and
+                        not table_pattern.match(next_line) and
+                        not heading_guid_pattern.match(next_line) and
+                        not requirement_line_pattern.match(next_line)
+                    ):
                         details.append(next_line)
+
                     j += 1
 
                 requirements.append([
@@ -51,7 +62,7 @@ def extract_requirements_final(pdf_path):
 
     return requirements
 
-# ----------- Save to Excel with Formatting -----------
+# ----------- Excel Formatting -----------
 
 def save_to_excel(data, pdf_path):
     df = pd.DataFrame(data, columns=["Requirement ID", "Details", "Requirement/Information", "HSE Service"])
@@ -62,14 +73,15 @@ def save_to_excel(data, pdf_path):
 
     df.to_excel(output_path, index=False)
 
-    # Format Excel
     wb = load_workbook(output_path)
     ws = wb.active
 
+    # Bold headers
     header_font = Font(bold=True)
     for cell in ws[1]:
         cell.font = header_font
 
+    # Wrap text and resize columns
     for col in ws.columns:
         max_length = 0
         col_letter = col[0].column_letter
@@ -82,7 +94,7 @@ def save_to_excel(data, pdf_path):
     wb.save(output_path)
     return output_path
 
-# ----------- GUI -----------
+# ----------- GUI Logic -----------
 
 def process_pdf():
     pdf_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
@@ -92,12 +104,14 @@ def process_pdf():
     try:
         extracted = extract_requirements_final(pdf_path)
         if not extracted:
-            messagebox.showwarning("No Data Found", "No valid requirements were found in the selected PDF.")
+            messagebox.showwarning("No Data", "No valid requirements found.")
             return
         output_path = save_to_excel(extracted, pdf_path)
         messagebox.showinfo("Success", f"Excel saved to:\n{output_path}")
     except Exception as e:
         messagebox.showerror("Error", str(e))
+
+# ----------- Launch GUI -----------
 
 root = tk.Tk()
 root.title("Requirement Extractor")
