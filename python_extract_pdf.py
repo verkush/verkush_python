@@ -1,23 +1,13 @@
-import fitz  # PyMuPDF
-import pandas as pd
-import re
-from pathlib import Path
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Font
-
-# ----------- Extraction Function -----------
-
 def extract_requirements_final(pdf_path):
     doc = fitz.open(pdf_path)
     requirements = []
 
-    # Regex patterns
-    header_footer_patterns = re.compile(r"GM Confidential|Page \d+|^\s*\d+\s*$", re.IGNORECASE)
+    # Patterns
+    header_footer_pattern = re.compile(r"GM Confidential|Page \d+|^\s*\d+\s*$", re.IGNORECASE)
     table_pattern = re.compile(r'^\|.*\|$')
     heading_guid_pattern = re.compile(r"^\d+(\.\d+)*\s+.*GUID:", re.IGNORECASE)
-    requirement_line_pattern = re.compile(r"^GUID:\s*CYS-[\w\-]+.*CR\s+\d+", re.IGNORECASE)
+    valid_guid_pattern = re.compile(r"^GUID:\s*CYS-[\w\-]+.*CR\s+\d+", re.IGNORECASE)
+    any_guid_pattern = re.compile(r".*GUID:\s*CYS-[\w\-]+", re.IGNORECASE)
 
     for page in doc:
         lines = page.get_text().split('\n')
@@ -27,24 +17,25 @@ def extract_requirements_final(pdf_path):
         while i < len(lines):
             line = lines[i]
 
-            if requirement_line_pattern.match(line):
+            # Match real requirement lines only
+            if valid_guid_pattern.match(line):
                 req_id_line = line.strip()
                 info_type = "Information" if "(information only)" in req_id_line.lower() else "Requirement"
 
-                # Gather detail lines until next requirement or page end
+                # Gather details after this line
                 details = []
                 j = i + 1
                 while j < len(lines):
                     next_line = lines[j].strip()
 
-                    if requirement_line_pattern.match(next_line):
+                    if valid_guid_pattern.match(next_line):
                         break
 
                     if (
-                        not header_footer_patterns.search(next_line) and
-                        not table_pattern.match(next_line) and
-                        not heading_guid_pattern.match(next_line) and
-                        not requirement_line_pattern.match(next_line)
+                        not any_guid_pattern.match(next_line)
+                        and not header_footer_pattern.search(next_line)
+                        and not table_pattern.match(next_line)
+                        and not heading_guid_pattern.match(next_line)
                     ):
                         details.append(next_line)
 
@@ -62,7 +53,7 @@ def extract_requirements_final(pdf_path):
 
     return requirements
 
-# ----------- Excel Formatting -----------
+# ----------- Excel Formatter -----------
 
 def save_to_excel(data, pdf_path):
     df = pd.DataFrame(data, columns=["Requirement ID", "Details", "Requirement/Information", "HSE Service"])
@@ -94,7 +85,7 @@ def save_to_excel(data, pdf_path):
     wb.save(output_path)
     return output_path
 
-# ----------- GUI Logic -----------
+# ----------- GUI Setup -----------
 
 def process_pdf():
     pdf_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
