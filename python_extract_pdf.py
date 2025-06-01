@@ -7,6 +7,14 @@ from tkinter import filedialog, messagebox
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font
 
+# ----------- Format paragraph -----------
+
+def format_paragraph(lines):
+    """Convert a list of lines into a clean paragraph."""
+    cleaned = [line.strip().rstrip(".") for line in lines if line]
+    paragraph = ". ".join(cleaned).strip()
+    return paragraph + "." if paragraph else ""
+
 # ----------- Requirement Extraction -----------
 
 def extract_requirements_final(pdf_path):
@@ -28,12 +36,10 @@ def extract_requirements_final(pdf_path):
         while i < len(lines):
             line = lines[i]
 
-            # Match real requirement lines only
             if valid_guid_pattern.match(line):
                 req_id_line = line.strip()
                 info_type = "Information" if "(information only)" in req_id_line.lower() else "Requirement"
 
-                # Gather details after this line
                 details = []
                 j = i + 1
                 while j < len(lines):
@@ -54,7 +60,7 @@ def extract_requirements_final(pdf_path):
 
                 requirements.append([
                     req_id_line,
-                    "\n".join(details).strip(),
+                    format_paragraph(details),
                     info_type,
                     ""
                 ])
