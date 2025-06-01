@@ -96,7 +96,7 @@ def save_to_excel(data, pdf_path):
     wb.save(output_path)
     return output_path
 
-# ----------- GUI Setup -----------
+# ----------- GUI Logic -----------
 
 def process_pdf():
     pdf_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
@@ -109,11 +109,11 @@ def process_pdf():
             messagebox.showwarning("No Data", "No valid requirements found.")
             return
         output_path = save_to_excel(extracted, pdf_path)
-        messagebox.showinfo("Success", f"Excel saved to:\n{output_path}")
+        messagebox.showinfo("Success", f"{len(extracted)} requirements extracted.\n\nExcel saved to:\n{output_path}")
     except Exception as e:
         messagebox.showerror("Error", str(e))
 
-# ----------- Launch GUI -----------
+# ----------- GUI Layout -----------
 
 root = tk.Tk()
 root.title("Requirement Extractor")
