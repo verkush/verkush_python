@@ -2,26 +2,27 @@ import fitz  # PyMuPDF
 import pandas as pd
 import re
 from pathlib import Path
+import os
+import platform
+import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font
 
-# ----------- Format paragraph -----------
+# ----------- Paragraph Formatter -----------
 
 def format_paragraph(lines):
-    """Convert a list of lines into a clean paragraph."""
     cleaned = [line.strip().rstrip(".") for line in lines if line]
     paragraph = ". ".join(cleaned).strip()
     return paragraph + "." if paragraph else ""
 
-# ----------- Requirement Extraction -----------
+# ----------- Requirement Extractor -----------
 
 def extract_requirements_final(pdf_path):
     doc = fitz.open(pdf_path)
     requirements = []
 
-    # Patterns
     header_footer_pattern = re.compile(r"GM Confidential|Page \d+|^\s*\d+\s*$", re.IGNORECASE)
     table_pattern = re.compile(r'^\|.*\|$')
     heading_guid_pattern = re.compile(r"^\d+(\.\d+)*\s+.*GUID:", re.IGNORECASE)
@@ -70,7 +71,7 @@ def extract_requirements_final(pdf_path):
 
     return requirements
 
-# ----------- Excel Formatter -----------
+# ----------- Excel Saver & Formatter -----------
 
 def save_to_excel(data, pdf_path):
     df = pd.DataFrame(data, columns=["Requirement ID", "Details", "Requirement/Information", "HSE Service"])
@@ -84,7 +85,7 @@ def save_to_excel(data, pdf_path):
     wb = load_workbook(output_path)
     ws = wb.active
 
-    # Bold headers
+    # Bold header
     header_font = Font(bold=True)
     for cell in ws[1]:
         cell.font = header_font
@@ -102,6 +103,16 @@ def save_to_excel(data, pdf_path):
     wb.save(output_path)
     return output_path
 
+# ----------- Open Folder Cross-Platform -----------
+
+def open_folder(path):
+    if platform.system() == "Windows":
+        os.startfile(path)
+    elif platform.system() == "Darwin":  # macOS
+        subprocess.Popen(["open", path])
+    else:  # Linux
+        subprocess.Popen(["xdg-open", path])
+
 # ----------- GUI Logic -----------
 
 def process_pdf():
@@ -116,6 +127,7 @@ def process_pdf():
             return
         output_path = save_to_excel(extracted, pdf_path)
         messagebox.showinfo("Success", f"{len(extracted)} requirements extracted.\n\nExcel saved to:\n{output_path}")
+        open_folder(output_path.parent)
     except Exception as e:
         messagebox.showerror("Error", str(e))
 
