@@ -34,9 +34,36 @@ def extract_requirements_final(pdf_path):
         while i < len(lines):
             line = lines[i]
 
+            # Handle GUID split across lines
+            if line.lower().startswith("guid:") and i + 1 < len(lines) and lines[i + 1].startswith("CYS-"):
+                line = f"{line} {lines[i + 1]}"
+                i += 1
+
             if valid_guid_pattern.match(line):
-                req_id_line = line.strip()
-                info_type = "Information" if "(information only)" in req_id_line.lower() else "Requirement"
+                # Check if valid GUID has valid detail
+                j = i + 1
+                has_valid_detail = False
+                while j < len(lines):
+                    next_line = lines[j].strip()
+                    if valid_guid_pattern.match(next_line):
+                        break
+                    if (
+                        not any_guid_pattern.match(next_line)
+                        and not header_footer_pattern.search(next_line)
+                        and not table_pattern.match(next_line)
+                        and not heading_guid_pattern.match(next_line)
+                    ):
+                        has_valid_detail = True
+                        break
+                    j += 1
+
+                if not has_valid_detail:
+                    i = j
+                    continue
+
+                match = re.search(r"CYS-[\w\-]+.*CR\s+\d+", line)
+                req_id_clean = match.group(0) if match else line.strip()
+                info_type = "Information" if "(information only)" in line.lower() else "Requirement"
 
                 details = []
                 j = i + 1
@@ -57,7 +84,7 @@ def extract_requirements_final(pdf_path):
                     j += 1
 
                 requirements.append([
-                    req_id_line,
+                    req_id_clean,
                     format_paragraph(details),
                     info_type,
                     ""
@@ -71,7 +98,7 @@ def extract_requirements_final(pdf_path):
 selected_files = []
 
 def add_files():
-    files = filedialog.askopenfilenames(title="Select PDF Files", filetypes=[("PDF Files", "*.pdf")])
+    files = filedialog.askopenfilenames(title="Select PDF Files", filetypes=[["PDF Files", "*.pdf"]])
     for file in files:
         if file not in selected_files:
             selected_files.append(file)
@@ -95,7 +122,8 @@ def extract_all():
     for path in selected_files:
         cadence_raw = extract_release_cadence(path)
         cadence_name = f"Cadence {cadence_raw}"
-        cadence_columns.append(cadence_name)
+        if cadence_name not in cadence_columns:
+            cadence_columns.append(cadence_name)
 
         reqs = extract_requirements_final(path)
         cadence_to_reqs[cadence_name] = {}
@@ -123,7 +151,8 @@ def extract_all():
 
     highlight_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
 
-    for req_id, content in all_requirements.items():
+    for req_id in sorted(all_requirements):
+        content = all_requirements[req_id]
         row = [req_id, content["Requirement/Information"]]
         detail_values = [content.get(c, "") for c in cadence_columns]
 
@@ -132,15 +161,16 @@ def extract_all():
 
         filtered = [v for v in detail_values if v.strip()]
         if len(set(filtered)) > 1:
+            base_detail = filtered[0]
             for col_idx, value in enumerate(detail_values, start=3):
-                if value.strip():
+                if value.strip() and value.strip() != base_detail:
                     ws.cell(row=row_idx, column=col_idx).fill = highlight_fill
 
         for col in range(1, len(headers) + 1):
             ws.cell(row=row_idx, column=col).alignment = Alignment(wrap_text=True)
 
     wb.save(save_path)
-    messagebox.showinfo("Success", f"Saved to:\n{save_path}")
+    messagebox.showinfo("Success", f"Extracted {len(all_requirements)} requirements.\nSaved to:\n{save_path}")
 
 root = tk.Tk()
 root.title("Multi-PDF Requirement Extractor")
