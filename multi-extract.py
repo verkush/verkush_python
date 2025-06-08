@@ -115,9 +115,10 @@ def extract_all():
         for cadence in cadence_columns:
             all_requirements[req_id][cadence] = cadence_to_reqs.get(cadence, {}).get(req_id, "")
 
-    save_dir = os.path.dirname(selected_files[0])
-    os.makedirs(os.path.join(save_dir, "Extracted_Requirement"), exist_ok=True)
-    save_path = os.path.join(save_dir, "Extracted_Requirement", "All_Requirements.xlsx")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    save_dir = os.path.join(script_dir, "Extracted_Requirement")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, "All_Requirements.xlsx")
 
     wb = Workbook()
     ws = wb.active
