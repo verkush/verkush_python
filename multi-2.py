@@ -3,7 +3,7 @@ import re
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, PatternFill
 from collections import defaultdict
 from datetime import datetime
@@ -141,16 +141,47 @@ def extract_all():
     save_dir = os.path.join(script_dir, "Extracted_Requirement")
     os.makedirs(save_dir, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     first_guid_match = None
     for path in selected_files:
-        with open(path, 'rb') as f:
-            text = fitz.open(path)[0].get_text()
-            first_guid_match = re.search(r"CYS-[\w\-]+", text)
-            if first_guid_match:
-                break
+        text = fitz.open(path)[0].get_text()
+        first_guid_match = re.search(r"CYS-[\w\-]+", text)
+        if first_guid_match:
+            break
     base_name = first_guid_match.group(0) if first_guid_match else "Requirements"
+    existing_file_path = None
+    for fname in os.listdir(save_dir):
+        if fname.startswith(base_name) and fname.endswith(".xlsx"):
+            existing_file_path = os.path.join(save_dir, fname)
+            break
 
+    append_selected = option_var.get() == "Append to Existing Excel File"
+    if append_selected and existing_file_path:
+        wb = load_workbook(existing_file_path)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+
+        for cadence_name in cadence_columns:
+            if cadence_name not in headers:
+                ws.cell(row=1, column=len(headers)+1).value = cadence_name
+                headers.append(cadence_name)
+
+        req_id_col = headers.index("Requirement ID") + 1
+        req_id_row_map = {ws.cell(row=i, column=req_id_col).value: i for i in range(2, ws.max_row + 1)}
+
+        for cadence_name in cadence_columns:
+            cadence_col = headers.index(cadence_name) + 1
+            for req_id in all_requirements:
+                if req_id in req_id_row_map:
+                    detail = all_requirements[req_id].get(cadence_name, "")
+                    ws.cell(row=req_id_row_map[req_id], column=cadence_col).value = detail
+
+        wb.save(existing_file_path)
+        os.startfile(existing_file_path)
+        status_label.config(text=f"Updated existing file: {os.path.basename(existing_file_path)}")
+        messagebox.showinfo("Update Complete", f"✅ Cadence data added to existing file:\n{existing_file_path}")
+        return
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     excel_filename = f"{base_name}_{timestamp}.xlsx"
     save_path = os.path.join(save_dir, excel_filename)
 
@@ -171,11 +202,12 @@ def extract_all():
         row_idx = ws.max_row + 1
         ws.append(row + detail_values + [""])
 
-        filtered = [v for v in detail_values if v.strip()]
-        if len(set(filtered)) > 1:
-            base_detail = filtered[0]
+        unique_values = list(set(v.strip() for v in detail_values if v.strip()))
+
+        if len(unique_values) > 1:
+            base = unique_values[0]
             for col_idx, value in enumerate(detail_values, start=3):
-                if value.strip() and value.strip() != base_detail:
+                if value.strip() and value.strip() != base:
                     ws.cell(row=row_idx, column=col_idx).fill = highlight_fill
 
         for col in range(1, len(headers) + 1):
@@ -196,12 +228,13 @@ def extract_all():
 
     wb.save(save_path)
     os.startfile(save_path)
-    messagebox.showinfo("Success", f"Extracted {len(all_requirements)} requirements.\nSaved to:\n{save_path}")
+    status_label.config(text=f"Created new file: {os.path.basename(save_path)}")
+    messagebox.showinfo("New File Created", f"✅ Extracted {len(all_requirements)} requirements.\nSaved to:\n{save_path}")
 
 
 root = tk.Tk()
 root.title("Multi-PDF Requirement Extractor")
-root.geometry("620x450")
+root.geometry("620x520")
 root.resizable(False, False)
 
 frame = tk.Frame(root)
@@ -222,7 +255,21 @@ add_btn.grid(row=0, column=0, padx=10)
 remove_btn = tk.Button(btn_frame, text="Remove Selected", command=remove_selected, width=20)
 remove_btn.grid(row=0, column=1, padx=10)
 
+option_frame = tk.Frame(root)
+option_frame.pack(pady=5)
+
+option_label = tk.Label(option_frame, text="Step 2: Choose Output Option", font=("Arial", 12))
+option_label.pack()
+
+option_var = tk.StringVar(value="Create New Excel File")
+option_menu = tk.OptionMenu(option_frame, option_var, "Create New Excel File", "Append to Existing Excel File")
+option_menu.config(width=30)
+option_menu.pack()
+
 extract_btn = tk.Button(root, text="Extract Requirements", command=extract_all, width=30, bg="#4CAF50", fg="white")
 extract_btn.pack(pady=20)
+
+status_label = tk.Label(root, text="", font=("Arial", 11), fg="blue")
+status_label.pack()
 
 root.mainloop()
