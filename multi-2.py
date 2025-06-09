@@ -27,7 +27,7 @@ def extract_requirements_final(pdf_path):
     header_footer_pattern = re.compile(r"GM Confidential|Page \d+|^\s*\d+\s*$", re.IGNORECASE)
     table_pattern = re.compile(r'^\|.*\|$')
     heading_guid_pattern = re.compile(r"^\d+(\.\d+)*\s+.*GUID:", re.IGNORECASE)
-    valid_guid_pattern = re.compile(r"^GUID:\s*CYS-[\w\-]+.*CR\s+\d+", re.IGNORECASE)
+    valid_guid_pattern = re.compile(r"^GUID:\s*CYS-[\w\-]+", re.IGNORECASE)
     any_guid_pattern = re.compile(r".*GUID:\s*CYS-[\w\-]+", re.IGNORECASE)
 
     for page in doc:
@@ -63,7 +63,7 @@ def extract_requirements_final(pdf_path):
                     i = j
                     continue
 
-                match = re.search(r"CYS-[\w\-]+.*CR\s+\d+", line)
+                match = re.search(r"CYS-[\w\-]+", line)
                 req_id_clean = match.group(0) if match else line.strip()
                 info_type = "Information" if "(information only)" in line.lower() else "Requirement"
 
@@ -95,19 +95,7 @@ def extract_requirements_final(pdf_path):
     return requirements
 
 
-def extract_first_guid(pdf_path):
-    doc = fitz.open(pdf_path)
-    guid_pattern = re.compile(r"CYS-[\w\-]+")
-    for page in doc:
-        text = page.get_text()
-        match = guid_pattern.search(text)
-        if match:
-            return match.group(0)
-    return "Unknown"
-
-
 selected_files = []
-
 
 def add_files():
     files = filedialog.askopenfilenames(title="Select PDF Files", filetypes=[["PDF Files", "*.pdf"]])
@@ -116,13 +104,11 @@ def add_files():
             selected_files.append(file)
             listbox.insert(tk.END, os.path.basename(file))
 
-
 def remove_selected():
     selected_indices = listbox.curselection()
     for index in reversed(selected_indices):
         listbox.delete(index)
         del selected_files[index]
-
 
 def extract_all():
     if not selected_files:
@@ -156,11 +142,16 @@ def extract_all():
     os.makedirs(save_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if selected_files:
-        guid_name = extract_first_guid(selected_files[0])
-    else:
-        guid_name = "Requirements"
-    excel_filename = f"{guid_name}_{timestamp}.xlsx"
+    first_guid_match = None
+    for path in selected_files:
+        with open(path, 'rb') as f:
+            text = fitz.open(path)[0].get_text()
+            first_guid_match = re.search(r"CYS-[\w\-]+", text)
+            if first_guid_match:
+                break
+    base_name = first_guid_match.group(0) if first_guid_match else "Requirements"
+
+    excel_filename = f"{base_name}_{timestamp}.xlsx"
     save_path = os.path.join(save_dir, excel_filename)
 
     wb = Workbook()
