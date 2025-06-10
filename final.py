@@ -1,234 +1,312 @@
 """
-CYS Multi-PDF Requirement Extractor (Optimized with Enhanced GUI)
+CYS Multi-PDF Requirement Extractor  ▸  Dark-Mode GUI  ▸  v2025-06-11
 
-Features:
----------
-✔ Parse multiple PDF files and extract all CYS GUIDs (e.g., CYS-HSM, CYS-SHE, etc.)
-✔ Support legacy lines with multiple GUIDs like "Legacy GUID: CYS-HSM_abc / CYS-SHE_xyz"
-✔ Extract requirement details, ignoring headers/footers and tables
-✔ Dynamically extract and append Cadence number (e.g., Cadence 22.22.142)
-✔ Highlight differences in details for same GUID across cadence versions
-✔ Append new cadence columns to previously saved Excel files
-✔ GUI: Add/Remove PDFs, update existing Excel, display status, show progress bar
-✔ Auto save Excel file in script's folder with timestamped name
-✔ Automatically open the generated Excel file (for new file creation only)
+Features
+--------
+✔ Extract every CYS-based GUID (CYS-HSM, CYS-SHE, etc.) – even legacy lines with spaces
+✔ Skip headers, footers, and table rows
+✔ Track & append Cadence columns; highlight text diffs across cadences
+✔ Dark-theme Tkinter GUI with progress bar (threaded, so it never freezes)
+✔ Excel output: auto-size columns **and wrap text** in all cadence/detail cells
 """
 
-import fitz  # PyMuPDF
-import re
-import os
-import tkinter as tk
-from tkinter import filedialog, messagebox, Listbox, END, ttk
-import openpyxl
-from openpyxl.styles import PatternFill
-from datetime import datetime
 import difflib
+import os
+import re
 import subprocess
 import threading
 import time
+from datetime import datetime
 
-# Patterns
-table_pattern = re.compile(r'^\|.*\|$')
-header_footer_pattern = re.compile(r"GM Confidential|Page \d+|^\s*\d+\s*$", re.IGNORECASE)
-heading_guid_pattern = re.compile(r"^\d+(\.\d+)*\s+.*GUID:", re.IGNORECASE)
-any_guid_pattern = re.compile(r".*GUID:\s*CYS-[A-Z]+[_-]?[\w-]+", re.IGNORECASE)
-guid_extract_pattern = re.compile(r"CYS-[A-Z]+[_-]?[\w-]+", re.IGNORECASE)
+import fitz  # PyMuPDF
+import openpyxl
+from openpyxl.styles import Alignment, PatternFill
+import tkinter as tk
+from tkinter import END, Listbox, filedialog, messagebox, ttk
 
-def is_file_locked(filepath):
-    if not os.path.exists(filepath):
-        return False
+# ──────────────────────────────────────────────────────────────────────────────
+# Regex patterns ─ now tolerant of spaces / extra hyphens in legacy GUID lines
+# ──────────────────────────────────────────────────────────────────────────────
+GUID_CORE = r"CYS-[A-Z]+"
+# e.g.  CYS-HSM_ac0e60_133   or   CYS-HSM_ ac0e60_133
+GUID_PATTERN = re.compile(rf"{GUID_CORE}[_\s-]*[\w-]+", re.IGNORECASE)
+ANY_GUID_LINE = re.compile(rf".*GUID:\s*{GUID_CORE}[_\s-]*[\w-]+", re.IGNORECASE)
+
+TABLE_ROW = re.compile(r"^\|.*\|$")
+HEADER_FOOTER = re.compile(r"GM Confidential|Page \d+|^\s*\d+\s*$", re.IGNORECASE)
+HEADING_WITH_GUID = re.compile(r"^\d+(\.\d+)*\s+.*GUID:", re.IGNORECASE)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def is_file_locked(path: str) -> bool:
+    """Return True if another process has the file open/locked."""
     try:
-        os.rename(filepath, filepath)
+        if not os.path.exists(path):
+            return False
+        os.rename(path, path)  # harmless self-rename
         return False
     except OSError:
         return True
 
+
 def format_paragraph(lines):
-    return ' '.join(line.strip() for line in lines if line.strip())
+    return " ".join(l.strip() for l in lines if l.strip())
 
-def extract_cadence(text):
-    match = re.search(r"\b(\d+\.\d+\.\d+)\b", text)
-    return f"Cadence {match.group(1)}" if match else "Cadence Unknown"
 
-def extract_requirements_final(pdf_path):
-    doc = fitz.open(pdf_path)
-    cadence = extract_cadence(doc[0].get_text())
-    requirements = []
-    for page_num in range(doc.page_count):
-        page = doc.load_page(page_num)
-        lines = [line.strip() for line in page.get_text().split('\n') if line.strip()]
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            guid_matches = guid_extract_pattern.findall(line)
-            if guid_matches:
-                details = []
-                j = i + 1
-                while j < len(lines):
-                    next_line = lines[j].strip()
-                    if guid_extract_pattern.search(next_line):
-                        break
-                    if not any_guid_pattern.match(next_line) and not header_footer_pattern.search(next_line) and not table_pattern.match(next_line) and not heading_guid_pattern.match(next_line):
-                        details.append(next_line)
-                    j += 1
-                if details:
-                    detail = format_paragraph(details)
-                    info_type = "Information" if "(information only)" in line.lower() else "Requirement"
-                    for guid in guid_matches:
-                        requirements.append([guid.strip(), info_type, detail, cadence, ""])
-                i = j
-            else:
-                i += 1
-    return requirements, cadence
+def extract_cadence(text: str) -> str:
+    """e.g. page text contains '22.22.142'  →  'Cadence 22.22.142'"""
+    m = re.search(r"\b(\d+\.\d+\.\d+)\b", text)
+    return f"Cadence {m.group(1)}" if m else "Cadence Unknown"
 
-def highlight_differences(old_text, new_text):
-    diff = list(difflib.ndiff(old_text.split(), new_text.split()))
-    highlighted = ' '.join([f'*{w[2:]}*' if w.startswith('+ ') else w[2:] for w in diff if not w.startswith('- ')])
-    return highlighted
 
-def save_to_excel(requirements_all, output_path, update_existing=False):
-    if update_existing and os.path.exists(output_path):
-        wb = openpyxl.load_workbook(output_path)
+# ──────────────────────────────────────────────────────────────────────────────
+# PDF Parsing
+# ──────────────────────────────────────────────────────────────────────────────
+def extract_requirements_from(pdf_path):
+    """Return (requirement_rows, cadence) for a single PDF."""
+    try:
+        doc = fitz.open(pdf_path)
+        cadence = extract_cadence(doc[0].get_text())
+        rows = []
+
+        for page in doc:
+            lines = [ln.strip() for ln in page.get_text().split("\n") if ln.strip()]
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                guids = GUID_PATTERN.findall(line)
+                if guids:
+                    # Grab detail lines that belong to this GUID block
+                    details = []
+                    j = i + 1
+                    while j < len(lines):
+                        nxt = lines[j]
+                        if GUID_PATTERN.search(nxt):
+                            break  # next GUID block starts
+                        if (
+                            not ANY_GUID_LINE.match(nxt)
+                            and not HEADER_FOOTER.search(nxt)
+                            and not TABLE_ROW.match(nxt)
+                            and not HEADING_WITH_GUID.match(nxt)
+                        ):
+                            details.append(nxt)
+                        j += 1
+
+                    if details:
+                        detail_text = format_paragraph(details)
+                        info_type = (
+                            "Information" if "(information only)" in line.lower() else "Requirement"
+                        )
+                        for g in guids:
+                            # normalise: collapse internal whitespace
+                            clean = re.sub(r"\s+", "", g)
+                            rows.append([clean, info_type, detail_text, cadence, ""])
+                    i = j
+                else:
+                    i += 1
+
+        return rows, cadence
+
+    except Exception as exc:
+        messagebox.showerror(
+            "PDF Error", f"Failed to process “{os.path.basename(pdf_path)}”:\n{exc}"
+        )
+        return [], "Cadence Unknown"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Excel routines
+# ──────────────────────────────────────────────────────────────────────────────
+def highlight_diff(old: str, new: str) -> str:
+    diff = difflib.ndiff(old.split(), new.split())
+    return " ".join(
+        f"*{w[2:]}*" if w.startswith("+ ") else w[2:] for w in diff if not w.startswith("- ")
+    )
+
+
+def save_to_excel(rows, out_path, updating=False):
+    """Write list of rows = [guid, info_type, detail, cadence, service]."""
+    while is_file_locked(out_path):
+        # Give the user 5 seconds to close the workbook if it's open in Excel.
+        if messagebox.askretrycancel(
+            "File Locked",
+            f"“{os.path.basename(out_path)}” is open in another program.\n"
+            "Close it first then click Retry.",
+        ):
+            time.sleep(1)
+            continue
+        return
+
+    if updating and os.path.exists(out_path):
+        wb = openpyxl.load_workbook(out_path)
         ws = wb.active
-        headers = [cell.value for cell in ws[1]]
-        existing_ids = {ws.cell(row=i, column=1).value: i for i in range(2, ws.max_row + 1)}
+        header = [c.value for c in ws[1]]
+        guid_row = {ws.cell(r, 1).value: r for r in range(2, ws.max_row + 1)}
     else:
         wb = openpyxl.Workbook()
         ws = wb.active
-        headers = ["Requirement ID", "Requirement/Information"]
-        ws.append(headers)
-        existing_ids = {}
+        header = ["Requirement ID", "Requirement/Information"]
+        ws.append(header)
+        guid_row = {}
 
-    for req_id, info_type, detail, cadence, service in requirements_all:
-        if cadence not in headers:
-            headers.insert(-1 if "HSE Service" in headers else len(headers), cadence)
-            ws.cell(row=1, column=headers.index(cadence) + 1).value = cadence
-        if "HSE Service" not in headers:
-            headers.append("HSE Service")
-            ws.cell(row=1, column=headers.index("HSE Service") + 1).value = "HSE Service"
-        if req_id in existing_ids:
-            row = existing_ids[req_id]
-            col = headers.index(cadence) + 1
-            existing_detail = ws.cell(row=row, column=col).value or ""
-            if existing_detail != detail:
-                ws.cell(row=row, column=col).value = highlight_differences(existing_detail, detail)
+    # Make sure cadence columns and “HSE Service” column exist
+    for *_, cadence, _ in rows:
+        if cadence not in header:
+            header.append(cadence)
+            ws.cell(row=1, column=len(header)).value = cadence
+    if "HSE Service" not in header:
+        header.append("HSE Service")
+        ws.cell(row=1, column=len(header)).value = "HSE Service"
+
+    # Styling for header (dark fill, white text)
+    dark_fill = PatternFill("solid", fgColor="444444")
+    for col_idx, head in enumerate(header, 1):
+        cell = ws.cell(1, col_idx)
+        cell.fill = dark_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.font = openpyxl.styles.Font(color="FFFFFF", bold=True)
+
+    # Map for convenience
+    col_index = {h: i + 1 for i, h in enumerate(header)}
+    service_col = col_index["HSE Service"]
+
+    # Insert or update rows
+    for guid, info_type, detail, cadence, service in rows:
+        if guid in guid_row:
+            r = guid_row[guid]
         else:
-            row = ws.max_row + 1
-            ws.cell(row=row, column=1).value = req_id
-            ws.cell(row=row, column=2).value = info_type
-            for head in headers[2:]:
-                col_idx = headers.index(head) + 1
-                if head == cadence:
-                    ws.cell(row=row, column=col_idx).value = detail
-                elif head == "HSE Service":
-                    ws.cell(row=row, column=col_idx).value = service
-            existing_ids[req_id] = row
+            r = ws.max_row + 1
+            guid_row[guid] = r
+            ws.cell(r, col_index["Requirement ID"]).value = guid
+            ws.cell(r, col_index["Requirement/Information"]).value = info_type
 
+        c = col_index[cadence]
+        cell = ws.cell(r, c)
+        prev = cell.value or ""
+        new_val = detail if prev == "" else highlight_diff(prev, detail) if prev != detail else prev
+        cell.value = new_val
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        # Add service if blank
+        if ws.cell(r, service_col).value in (None, ""):
+            ws.cell(r, service_col).value = service
+
+    # Auto-width columns (capped to 60)
     for col in ws.columns:
-        max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
-        ws.column_dimensions[col[0].column_letter].width = min(max_length + 5, 50)
+        max_len = max(len(str(c.value)) if c.value else 0 for c in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 60)
 
-    for _ in range(5):
-        if is_file_locked(output_path):
-            time.sleep(1)
-        else:
-            break
-    else:
-        messagebox.showerror("File Locked", f"Unable to update {output_path} because it is open or locked.")
-        return
+    wb.save(out_path)
 
-    wb.save(output_path)
 
-    if not update_existing:
-        subprocess.run(["start", output_path], shell=True)
+def auto_filename(example_pdf):
+    try:
+        with open(example_pdf, "rb") as f:
+            txt = f.read().decode("latin1", "ignore")
+            m = re.search(r"CYS-([A-Z]+)", txt)
+            tag = m.group(1).lower() if m else "guid"
+    except Exception:
+        tag = "guid"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"cys-{tag}_{ts}.xlsx"
 
-def generate_excel_filename(first_pdf_path):
-    with open(first_pdf_path, 'rb') as f:
-        content = f.read().decode('latin1', errors='ignore')
-        match = re.search(r'CYS-[A-Z]+', content)
-        prefix = match.group(0).split('-')[1].lower() if match else "guid"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"cys-{prefix}_{timestamp}.xlsx"
 
-def browse_pdfs():
-    files = filedialog.askopenfilenames(filetypes=[("PDF Files", "*.pdf")])
-    for file in files:
-        if file not in file_listbox.get(0, END):
-            file_listbox.insert(END, file)
-
-def remove_selected():
-    for i in file_listbox.curselection()[::-1]:
-        file_listbox.delete(i)
-
-def extract_all():
-    def task():
-        files = file_listbox.get(0, END)
-        if not files:
-            messagebox.showwarning("No Files", "Please add PDF files.")
-            return
-        all_requirements = []
-        progress_var.set(0)
-        progress_bar['maximum'] = len(files)
-        for idx, pdf_file in enumerate(files):
-            extracted, _ = extract_requirements_final(pdf_file)
-            all_requirements.extend(extracted)
-            progress_var.set(idx + 1)
-        if not all_requirements:
-            messagebox.showinfo("No Data", "No valid requirements found.")
-            return
-        output_dir = os.path.dirname(files[0])
-        output_file = generate_excel_filename(files[0])
-        output_path = os.path.join(output_dir, output_file)
-        if update_var.get():
-            existing_file = filedialog.askopenfilename(title="Select Existing Excel File", filetypes=[("Excel Files", "*.xlsx")])
-            if not existing_file:
-                return
-            output_path = existing_file
-            save_to_excel(all_requirements, output_path, update_existing=True)
-            status_label.config(text="✅ Excel updated.")
-        else:
-            save_to_excel(all_requirements, output_path, update_existing=False)
-            status_label.config(text="✅ New Excel created.")
-        progress_var.set(0)
-    threading.Thread(target=task).start()
-
-# GUI Setup
+# ──────────────────────────────────────────────────────────────────────────────
+# Tkinter GUI
+# ──────────────────────────────────────────────────────────────────────────────
 root = tk.Tk()
 root.title("CYS Multi-PDF Requirement Extractor")
-root.geometry("700x550")
-root.configure(bg='#f0f4f8')
+root.geometry("760x540")
+root.configure(bg="#1e1e1e")
 
-style = ttk.Style()
-style.configure("TButton", padding=6, relief="flat", background="#0078d4", foreground="#333", font=('Segoe UI', 10))
-style.configure("TLabel", background="#f0f4f8", font=('Segoe UI', 10))
-style.configure("TCheckbutton", background="#f0f4f8", font=('Segoe UI', 10))
+# -------- Widgets
+file_list = Listbox(
+    root, selectmode=tk.MULTIPLE, width=90, bg="#2e2e2e", fg="white", borderwidth=0
+)
+file_list.pack(padx=12, pady=10, fill="both", expand=False)
 
-frame = ttk.Frame(root)
-frame.pack(padx=20, pady=20, fill='both', expand=True)
+BTN_STYLE = dict(bg="#333333", fg="white", activebackground="#444444", activeforeground="white")
 
-file_listbox = Listbox(frame, selectmode=tk.MULTIPLE, width=80, height=10, font=('Consolas', 9))
-file_listbox.pack(pady=5)
+tk.Button(root, text="Add PDF Files", **BTN_STYLE, command=lambda: (
+    paths := filedialog.askopenfilenames(filetypes=[("PDF files", "*.pdf")]),
+    [file_list.insert(END, p) for p in paths if p not in file_list.get(0, END)]
+)).pack(pady=3)
 
-btn_frame = ttk.Frame(frame)
-btn_frame.pack(pady=5)
-
-add_btn = ttk.Button(btn_frame, text="Add PDF Files", command=browse_pdfs)
-add_btn.grid(row=0, column=0, padx=5)
-remove_btn = ttk.Button(btn_frame, text="Remove Selected", command=remove_selected)
-remove_btn.grid(row=0, column=1, padx=5)
+tk.Button(
+    root,
+    text="Remove Selected",
+    **BTN_STYLE,
+    command=lambda: [file_list.delete(i) for i in reversed(file_list.curselection())],
+).pack(pady=3)
 
 update_var = tk.BooleanVar()
-update_check = ttk.Checkbutton(frame, text="Update Existing Excel", variable=update_var)
-update_check.pack(pady=5)
+tk.Checkbutton(
+    root,
+    text="Update Existing Excel (choose file when prompted)",
+    variable=update_var,
+    bg="#1e1e1e",
+    fg="white",
+    activebackground="#1e1e1e",
+    activeforeground="white",
+).pack(pady=4)
 
-extract_btn = ttk.Button(frame, text="Extract Requirements", command=extract_all)
-extract_btn.pack(pady=10)
+progress = ttk.Progressbar(root, orient="horizontal", mode="determinate", length=680)
+progress.pack(pady=8)
 
-progress_var = tk.DoubleVar()
-progress_bar = ttk.Progressbar(frame, variable=progress_var, orient='horizontal', length=500, mode='determinate')
-progress_bar.pack(pady=5)
+status = tk.Label(root, text="", bg="#1e1e1e", fg="white")
+status.pack(pady=2)
 
-status_label = ttk.Label(frame, text="")
-status_label.pack(pady=5)
+
+# -------- Worker thread
+def run_extraction():
+    files = file_list.get(0, END)
+    if not files:
+        messagebox.showwarning("No Files", "Please add PDF files to process.")
+        return
+
+    # Collect rows
+    progress["value"] = 0
+    progress["maximum"] = len(files)
+    all_rows = []
+
+    for idx, pdf in enumerate(files, 1):
+        status.config(text=f"Reading “{os.path.basename(pdf)}” ({idx}/{len(files)}) …")
+        rows, _ = extract_requirements_from(pdf)
+        all_rows.extend(rows)
+        progress["value"] = idx
+        root.update_idletasks()
+
+    if not all_rows:
+        status.config(text="No valid requirements found in selected PDFs.")
+        messagebox.showinfo("No Data", "No valid requirements were found.")
+        progress["value"] = 0
+        return
+
+    if update_var.get():
+        xlsx_path = filedialog.askopenfilename(
+            title="Choose existing Excel file to update", filetypes=[("Excel files", "*.xlsx")]
+        )
+        if not xlsx_path:
+            status.config(text="Update cancelled.")
+            progress["value"] = 0
+            return
+    else:
+        xlsx_path = os.path.join(os.path.dirname(files[0]), auto_filename(files[0]))
+
+    save_to_excel(all_rows, xlsx_path, updating=update_var.get())
+    status.config(text=f"✅ Done. Excel {'updated' if update_var.get() else 'created'} → {os.path.basename(xlsx_path)}")
+
+    # Auto-open only for new workbooks
+    if not update_var.get():
+        subprocess.Popen(["start", "", xlsx_path], shell=True)
+
+
+tk.Button(
+    root,
+    text="Extract Requirements",
+    **BTN_STYLE,
+    command=lambda: threading.Thread(target=run_extraction, daemon=True).start(),
+).pack(pady=12)
 
 root.mainloop()
